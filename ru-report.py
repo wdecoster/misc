@@ -2,14 +2,17 @@ from argparse import ArgumentParser
 import tempfile
 import pysam
 import numpy as np
+import pandas as pd
 
 
 def main():
     args = get_args()
     off_target_bed = complement_bed(args.bam, args.bed, args.workdir)
+
     coverage_table = coverage(args.bam, args.bed, off_target_bed, args.workdir)
-    length_plots = overlay_histogram(args.bam, args.bed, off_target_bed)
-    make_report(content=[coverage_table, length_plots], outputf=args.output)
+    length_plots, length_stats = lengths(args.bam, args.bed, off_target_bed)
+    make_report(content=[coverage_table, length_plots, length_stats],
+                outputf=args.output)
 
 
 def get_args():
@@ -38,7 +41,6 @@ def mosdepth(bam, bed, dir, prefix):
     Call mosdepth with a certain bed file (which can have 3 or 4 columns)
     And return the .regions.bed.gz file as a pandas DataFrame
     """
-    import pandas as pd
     from subprocess import call
     import shlex
     if len(open(bed).readline().split('\t')) == 4:
@@ -103,17 +105,27 @@ def downsample(l, n):
         return np.random.choice(l, size=n)
 
 
-def overlay_histogram(bam, bed, off_target_bed):
+def lengths(bam, on_target_bed, off_target_bed):
     """
     Create a two-column subplot with normalised density plots of read lengths
     with left the normal and right the log-transformed lengths
     """
+
+    onlengths = read_lengths(bam, on_target_bed)
+    offlengths = read_lengths(bam, off_target_bed)
+
+    plot = length_plot(onlengths, offlengths)
+    stats = length_stat(onlengths, offlengths)
+    return plot, stats
+
+
+def length_plot(onlengths, offlengths):
     import plotly
     from plotly.subplots import make_subplots
     fig = make_subplots(rows=1, cols=2,
                         subplot_titles=("Read lengths", "Log-transformed read lengths"))
-    on = downsample(read_lengths(bam, bed), 1000)
-    off = downsample(read_lengths(bam, off_target_bed), 1000)
+    on = downsample(onlengths, 1000)
+    off = downsample(offlengths, 1000)
 
     fig.add_histogram(x=on, opacity=0.4, name="On Target",
                       histnorm="density", row=1, col=1, marker=dict(color="green"))
@@ -125,17 +137,47 @@ def overlay_histogram(bam, bed, off_target_bed):
                       histnorm="density", row=1, col=2, marker=dict(color="blue"))
     fig.update_layout(barmode='overlay')
     xtickvals = [10**i for i in range(10) if not 10**i > 10 * max(np.amax(on), np.amax(off))]
-    fig["layout"]["xaxis2"].update(tickvals=np.log10(xtickvals), ticktext=xtickvals)
+    fig["layout"]["xaxis2"].update(tickvals=np.log10(xtickvals), ticktext=xtickvals,
+                                   title_text="log-transformed read lengths")
+    fig["layout"]["yaxis1"].update(title_text="normalised number of reads")
+    fig["layout"]["yaxis2"].update(title_text="normalised number of reads")
     fig.update_xaxes(title_text="read lengths", row=1, col=1, rangemode='nonnegative')
-
     return plotly.offline.plot(fig, output_type="div", show_link=False, include_plotlyjs='cdn')
 
 
+def length_stat(onlengths, offlengths):
+    all = np.concatenate((onlengths, offlengths))
+    number_of_reads = [len(l) for l in (onlengths, offlengths)]
+    number_of_reads.append(sum(number_of_reads))
+    output = [np.sum(l) / 1e6 for l in (onlengths, offlengths)]
+    output.append(sum(output))
+    median_length = [np.median(l) for l in [onlengths, offlengths, all]]
+    mean_length = [np.average(l) for l in [onlengths, offlengths, all]]
+    return pd.DataFrame(
+        data=zip(number_of_reads, output, median_length, mean_length),
+        columns=['number of reads', 'data output (Mb)', 'median read length', 'mean read length'],
+        index=['on-target', 'off-target', 'total']) \
+        .transpose() \
+        .to_html(float_format=lambda x: f'{x:.2f}')
+
+
 def make_report(content, outputf):
+    import datetime
     with open(outputf, 'w') as output:
+        output.write(html_head)
+        output.write(f"<h1>Read Until Report {datetime.datetime.now()}")
         for item in content:
             output.write(item)
 
+
+html_head = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+</style>
+<title>Read Until Report</title>
+</head>"""
 
 if __name__ == '__main__':
     main()
