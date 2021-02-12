@@ -9,9 +9,9 @@ def main():
     args = get_args()
     off_target_bed = complement_bed(args.bam, args.bed, args.workdir)
 
-    coverage_table = coverage(args.bam, args.bed, off_target_bed, args.workdir)
+    coverage_html, coverage_plot = coverage(args.bam, args.bed, off_target_bed, args.workdir)
     length_plots, length_stats = lengths(args.bam, args.bed, off_target_bed)
-    make_report(content=[coverage_table, length_plots, length_stats],
+    make_report(content=[coverage_plot, coverage_html, length_plots, length_stats],
                 outputf=args.output)
 
 
@@ -28,12 +28,13 @@ def get_args():
 
 def coverage(bam, bed, off_target_bed, workdir):
     coverage = mosdepth(bam, bed, workdir, prefix="ontarget")
+    coverage_plot = make_coverage_plot(coverage['coverage'])
     return coverage.append(off_target_coverage(bam, off_target_bed, workdir),
                            ignore_index=True) \
         .to_html(index=False,
                  float_format=lambda x: f'{x:.2f}',
                  columns=['name', 'chrom', 'begin', 'end', 'coverage'],
-                 na_rep='-')
+                 na_rep='-'), coverage_plot
 
 
 def mosdepth(bam, bed, dir, prefix):
@@ -120,7 +121,6 @@ def lengths(bam, on_target_bed, off_target_bed):
 
 
 def length_plot(onlengths, offlengths):
-    import plotly
     from plotly.subplots import make_subplots
     fig = make_subplots(rows=1, cols=2,
                         subplot_titles=("Read lengths", "Log-transformed read lengths"))
@@ -142,7 +142,16 @@ def length_plot(onlengths, offlengths):
     fig["layout"]["yaxis1"].update(title_text="normalised number of reads")
     fig["layout"]["yaxis2"].update(title_text="normalised number of reads")
     fig.update_xaxes(title_text="read lengths", row=1, col=1, rangemode='nonnegative')
-    return plotly.offline.plot(fig, output_type="div", show_link=False, include_plotlyjs='cdn')
+    return fig.to_html(full_html=False, include_plotlyjs='cdn')
+
+
+def make_coverage_plot(coveragelevels):
+    import plotly.graph_objects as go
+    fig = go.Figure(data=go.Histogram(x=coveragelevels),
+                    layout=dict(title='Distribution of on-target coverage levels',
+                                xaxis=dict(title='On-target coverage',
+                                           rangemode='nonnegative')))
+    return fig.to_html(full_html=False, include_plotlyjs='cdn')
 
 
 def length_stat(onlengths, offlengths):
